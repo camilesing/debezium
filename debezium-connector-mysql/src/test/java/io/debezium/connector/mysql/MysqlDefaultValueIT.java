@@ -56,8 +56,8 @@ import io.debezium.util.Testing;
 @SkipWhenDatabaseVersion(check = LESS_THAN, major = 5, minor = 6, reason = "DDL uses fractional second data types, not supported until MySQL 5.6")
 public class MysqlDefaultValueIT extends AbstractConnectorTest {
 
-    // 4 meta events (set character_set etc.) and then 14 tables with 3 events each (drop DDL, create DDL, insert)
-    private static final int EVENT_COUNT = 4 + 14 * 3;
+    // 4 meta events (set character_set etc.) and then 15 tables with 3 events each (drop DDL, create DDL, insert)
+    private static final int EVENT_COUNT = 4 + 15 * 3;
 
     private static final Path DB_HISTORY_PATH = Testing.Files.createTestingPath("file-db-history-connect.txt").toAbsolutePath();
     private final UniqueDatabase DATABASE = new UniqueDatabase("myServer1", "default_value")
@@ -78,8 +78,7 @@ public class MysqlDefaultValueIT extends AbstractConnectorTest {
     public void afterEach() {
         try {
             stopConnector();
-        }
-        finally {
+        } finally {
             Testing.Files.delete(DB_HISTORY_PATH);
         }
     }
@@ -430,9 +429,9 @@ public class MysqlDefaultValueIT extends AbstractConnectorTest {
         assertThat(schemaE.defaultValue()).isEqualTo(true);
         assertThat(schemaF.defaultValue()).isEqualTo(true);
         assertThat(schemaG.defaultValue()).isEqualTo(false);
-        assertThat(schemaH.defaultValue()).isEqualTo(new byte[]{ 66, 1 });
+        assertThat(schemaH.defaultValue()).isEqualTo(new byte[]{66, 1});
         assertThat(schemaI.defaultValue()).isEqualTo(null);
-        assertThat(schemaJ.defaultValue()).isEqualTo(new byte[]{ 15, 97, 1, 0 });
+        assertThat(schemaJ.defaultValue()).isEqualTo(new byte[]{15, 97, 1, 0});
         assertEmptyFieldValue(record, "K");
     }
 
@@ -810,7 +809,45 @@ public class MysqlDefaultValueIT extends AbstractConnectorTest {
     }
 
     @Test
-    @FixFor({ "DBZ-771", "DBZ-1321" })
+    @SkipWhenKafkaVersion(check = EqualityCheck.EQUAL, value = KafkaVersion.KAFKA_1XX, description = "Not compatible with Kafka 1.x")
+    public void columnTypeAndDefaultValueChange2() throws Exception {
+        config = DATABASE.defaultConfig()
+                .with(MySqlConnectorConfig.SNAPSHOT_MODE, MySqlConnectorConfig.SnapshotMode.INITIAL)
+                .build();
+        start(MySqlConnector.class, config);
+
+       //  Testing.Print.enable();
+
+        SourceRecords records = consumeRecordsByTopic(EVENT_COUNT);
+
+        SourceRecord record = records.recordsForTopic(DATABASE.topicForTable("DBZ_772_CUSTOMERS")).get(0);
+        validate(record);
+
+        Schema customerTypeSchema = record.valueSchema().fields().get(1).schema().fields().get(1).schema();
+        assertThat(customerTypeSchema.defaultValue()).isEqualTo("HangZhou");
+
+        // Connect to the DB and issue our insert statement to test.
+        try (MySqlTestConnection db = MySqlTestConnection.forTestDatabase(DATABASE.getDatabaseName())) {
+            try (JdbcConnection connection = db.connect()) {
+                // Enable Query log option
+                connection.execute("SET binlog_rows_query_log_events=ON");
+                connection.execute("insert into DBZ_772_CUSTOMERS (id,city) values (2,null);");
+            }
+        }
+
+        // consume the records for the two executed statements
+        records = consumeRecordsByTopic(1);
+
+        record = records.recordsForTopic(DATABASE.topicForTable("DBZ_772_CUSTOMERS")).get(0);
+        validate(record);
+        logger.debug("camile+ print record" + record.toString());
+
+        customerTypeSchema = record.valueSchema().fields().get(1).schema().fields().get(1).schema();
+        assertThat(customerTypeSchema.defaultValue()).isEqualTo("HangZhou");
+    }
+
+    @Test
+    @FixFor({"DBZ-771", "DBZ-1321"})
     @SkipWhenKafkaVersion(check = EqualityCheck.EQUAL, value = KafkaVersion.KAFKA_1XX, description = "Not compatible with Kafka 1.x")
     public void columnTypeChangeResetsDefaultValue() throws Exception {
         config = DATABASE.defaultConfig()
